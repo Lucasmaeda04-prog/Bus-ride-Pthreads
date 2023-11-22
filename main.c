@@ -41,8 +41,8 @@ void *onibus(void *arg){
     printf("Thread do Onibus:(%d) iniciada\n",onibus->id);
     do {
         if(pthread_mutex_trylock(&onibus->pontos[(onibus->partida)%S].mutex)==0 ){
-            printf("Onibus %d está no ponto %d com %d pessoas total de pessoas:%d\n",onibus->id,(onibus->partida)%S,onibus->num_pessoas,total_pessoas);
             sem_wait(&onibus_pessoas);
+            printf("Onibus %d está no ponto %d com %d pessoas total de pessoas:%d\n",onibus->id,(onibus->partida)%S,onibus->num_pessoas,total_pessoas);
             if(total_pessoas<=0){
                 stay=0;
             }
