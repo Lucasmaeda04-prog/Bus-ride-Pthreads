@@ -7,6 +7,7 @@
 #include <semaphore.h> 
 #include <unistd.h>
 #include <sys/types.h>
+#include <time.h> 
 
 sem_t onibus_pessoas; 
 int S,C,A,P;
@@ -27,11 +28,21 @@ typedef struct{
     int partida; 
 }t_Onibus;
 
+typedef struct{
+    int id; 
+    int flag;
+    int ponto_origem; 
+    int ponto_saida;
+    time_t tempo_comeco; 
+    time_t tempo_fim; 
+    t_Onibus Onibus;
+}t_Passageiros;
+
 // ----------------------------------------------------------------------------------------
 
 void *pontoOnibus(void *arg){
     t_PontoOnibus *ponto = (t_PontoOnibus *)arg; 
-    printf("Thread do Ponto:(%d) iniciada\n",ponto->id);
+    printf("Thread do Ponto:(%d) iniciada e com %d passageiros esperando\n",ponto->id,ponto->num_pessoas);
     pthread_exit(0); 
 }
 
@@ -57,6 +68,12 @@ void *onibus(void *arg){
     pthread_exit(0); 
 }
 
+void *passageiro(void *arg){
+    t_Passageiros *passageiro = (t_Passageiros *)arg; 
+    passageiro->tempo_fim = time(NULL);
+    passageiro->tempo_fim = time( NULL);
+    pthread_exit(0);
+}
 // ----------------------------------------------------------------------------------------
  void main(int argc, char *argv[]){
     // usando valores pré-definido
@@ -70,39 +87,70 @@ void *onibus(void *arg){
     // PROCESSO ONIBUS
     if (pid == 0) {// Processo filho - Processo 'ônibus'
         
-        // INICIANDO PONTO DE ONIBUS
-        t_PontoOnibus pontos[S];
+        // DECLARANDO THREADS E AS ESTRUTURAS DE DADOS
+        t_Passageiros conjunto_passageiro[P];
+        pthread_t Passageiro_h[P];
+        t_PontoOnibus conjunto_pontos[S];
         pthread_t PontoOnibus_h[S];  
+        t_Onibus conjunto_onibus[C];
+        pthread_t Onibus_h[C];
+        
+        // INICIANDO PONTO DE ONIBUS ------------------------------------------------------
+        int tmp_start; 
+        int tmp_end;
         for(int i=0;i<S;i++){
-            pontos[i].id = i; 
-            sem_init(&pontos[i].pessoas,0,1);
-            pthread_mutex_init(&pontos[i].mutex,NULL);
-            if (pthread_create(&PontoOnibus_h[i],0,pontoOnibus,(void *)&pontos[i])!=0){
+            conjunto_pontos[i].id = i; 
+            sem_init(&conjunto_pontos[i].pessoas,0,1);
+            pthread_mutex_init(&conjunto_pontos[i].mutex,NULL);
+        }
+        // INICIANDO ONIBUS ---------------------------------------------------------------
+        for(int i=0;i<C;i++){
+            conjunto_onibus[i].id = i;
+            conjunto_onibus[i].pontos = conjunto_pontos;
+            conjunto_onibus[i].num_pessoas = 10; // APENAS PARA TESTE 
+            conjunto_onibus[i].partida = rand()%S; 
+        }
+        // INICIANDO PASSAGEIRO -----------------------------------------------------------
+        for(int i=0;i<P;i++){
+            conjunto_passageiro[i].flag = 0;
+            conjunto_passageiro[i].id = i;
+            tmp_start = rand()%S;
+            tmp_end = rand()%S;
+            conjunto_passageiro[i].ponto_origem = tmp_start;
+            conjunto_passageiro[i].ponto_saida = tmp_end;
+            conjunto_pontos[tmp_start].num_pessoas++; 
+        }
+
+        // -----------------------RUNNING THREADS -----------------------------------------
+        for(int i=0;i<S;i++){
+            if (pthread_create(&PontoOnibus_h[i],0,pontoOnibus,(void *)&conjunto_pontos[i])!=0){
                 printf("Falha ao criar o ponto de ônibus");
                 fflush(0);
                 exit(0);
             };
         }
-        // INICIANDO ONIBUS
-        t_Onibus conjunto_onibus[C];
-        pthread_t Onibus_h[C];
-        for(int i=0;i<C;i++){
-            conjunto_onibus[i].id = i;
-            conjunto_onibus[i].pontos = pontos;
-            conjunto_onibus[i].num_pessoas = 10; // APENAS PARA TESTE 
-            conjunto_onibus[i].partida = rand()%S; 
+         for(int i=0;i<C;i++){
             if (pthread_create(&Onibus_h[i],0,onibus,(void *)&conjunto_onibus[i])!=0){
                 printf("Falha ao criar o ônibus");
                 fflush(0);
                 exit(0);
             }; 
         }
-        
+         for(int i=0;i<P;i++){
+            if (pthread_create(&Passageiro_h[i],0,passageiro,(void *)&conjunto_passageiro[i])!=0){
+                printf("Falha ao criar o passageiro");
+                fflush(0);
+                exit(0);
+            }; 
+        }
         for (int i=0; i < S; i++) {
 		    pthread_join(PontoOnibus_h[ i ], 0);
         }
         for (int i=0; i < C; i++) {
             pthread_join(Onibus_h[ i ], 0);
+        }
+        for (int i=0; i < P; i++) {
+            pthread_join(Passageiro_h[ i ], 0);
         }
 
     }else if (pid > 0) {
