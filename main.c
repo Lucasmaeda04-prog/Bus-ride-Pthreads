@@ -9,14 +9,15 @@
 #include <sys/types.h>
 #include <time.h> 
 
-sem_t onibus_pessoas; 
+sem_t pessoas; 
+sem_t global_mutex; 
 int S,C,A,P;
 int total_pessoas; 
 
 typedef struct {
     int num_pessoas;
     int id; 
-    sem_t pessoas; // mutex para alterar o número de pessoas dentro.
+    pthread_mutex_t mutex_pessoas; // mutex para alterar o número de pessoas dentro.
     pthread_mutex_t mutex; // mutex para impedir que haja mais de um onibus em um mesmo ponto  
 }t_PontoOnibus; 
 
@@ -52,14 +53,12 @@ void *onibus(void *arg){
     printf("Thread do Onibus:(%d) iniciada\n",onibus->id);
     do {
         if(pthread_mutex_trylock(&onibus->pontos[(onibus->partida)%S].mutex)==0 ){
-            sem_wait(&onibus_pessoas);
-            printf("Onibus %d está no ponto %d com %d pessoas total de pessoas:%d\n",onibus->id,(onibus->partida)%S,onibus->num_pessoas,total_pessoas);
+            printf("Onibus %d está no ponto %d com %d pessoas \n",onibus->id,(onibus->partida)%S,onibus->num_pessoas);
             if(total_pessoas<=0){
                 stay=0;
             }
             total_pessoas--;
             onibus->num_pessoas--;
-            sem_post(&onibus_pessoas);
             pthread_mutex_unlock(&onibus->pontos[(onibus->partida)%S].mutex);
         }
         onibus->partida++; 
@@ -70,7 +69,7 @@ void *onibus(void *arg){
 
 void *passageiro(void *arg){
     t_Passageiros *passageiro = (t_Passageiros *)arg; 
-    passageiro->tempo_fim = time(NULL);
+    passageiro->tempo_comeco = time(NULL);
     passageiro->tempo_fim = time( NULL);
     pthread_exit(0);
 }
@@ -82,7 +81,8 @@ void *passageiro(void *arg){
     P = 100; // atoi(argv[3]);
     A = 0; // atoi(argv[4]);
     total_pessoas = P; 
-    sem_init(&onibus_pessoas,0,1); 
+    sem_init(&global_mutex,0,1);
+    sem_init(&pessoas,0,S);
     pid_t pid = fork();
     // PROCESSO ONIBUS
     if (pid == 0) {// Processo filho - Processo 'ônibus'
@@ -100,7 +100,7 @@ void *passageiro(void *arg){
         int tmp_end;
         for(int i=0;i<S;i++){
             conjunto_pontos[i].id = i; 
-            sem_init(&conjunto_pontos[i].pessoas,0,1);
+            pthread_mutex_init(&conjunto_pontos[i].mutex_pessoas,NULL);
             pthread_mutex_init(&conjunto_pontos[i].mutex,NULL);
         }
         // INICIANDO ONIBUS ---------------------------------------------------------------
