@@ -14,30 +14,38 @@ sem_t global_mutex;
 int S,C,A,P;
 int total_pessoas; 
 
-typedef struct {
+typedef struct t_Onibus t_Onibus;
+typedef struct t_Passageiros t_Passageiros;
+
+typedef struct t_{
     int num_pessoas;
     int id; 
-    pthread_mutex_t mutex_pessoas; // mutex para alterar o número de pessoas dentro.
-    pthread_mutex_t mutex; // mutex para impedir que haja mais de um onibus em um mesmo ponto  
+    pthread_mutex_t mutex; // mutex para impedir que haja mais de um onibus em um mesmo ponto.  
+    pthread_mutex_t mutex_busAcesso; // mutex que vai limitar o acesso a entrar o ônibus um por passageiro por vez. 
+    sem_t passageiros_espera; // semáforo contador para número de pessoas esperando no ponto 
+    t_Onibus *onibus; // ponteiro que indica qual ônibus está esperando no ponto 
+    t_Passageiros *fila_passageiros // ponteiro para o primeiro passageiro da fila
 }t_PontoOnibus; 
 
-typedef struct{
+struct t_Onibus{
     int num_pessoas; // espaço ocupado no buffer
     int assentos; // numero total de espaço no buffer
-    int id;
-    t_PontoOnibus *pontos; // Adicionando um ponteiro para a array de pontos de ônibus 
-    int partida; 
-}t_Onibus;
+    int id; 
+    t_PontoOnibus *pontos; // um ponteiro para a array de pontos de ônibus 
+    int partida;  // ponto de partida para o ônibus
+};
 
-typedef struct{
+struct t_Passageiros{     
     int id; 
     int flag;
     int ponto_origem; 
     int ponto_saida;
     time_t tempo_comeco; 
     time_t tempo_fim; 
-    t_Onibus Onibus;
-}t_Passageiros;
+    t_Onibus *Onibus;
+    struct t_Passageiro *proximo; 
+    pthread_mutex_t embarque; 
+};
 
 // ----------------------------------------------------------------------------------------
 
@@ -52,14 +60,14 @@ void *onibus(void *arg){
     t_Onibus *onibus = (t_Onibus *)arg; 
     printf("Thread do Onibus:(%d) iniciada\n",onibus->id);
     do {
-        if(pthread_mutex_trylock(&onibus->pontos[(onibus->partida)%S].mutex)==0 ){
+        if(pthread_mutex_trylock(&onibus->pontos[(onibus->partida)%S].mutex)==0 ){ // verificando se já há um ônibus no ponto 
             printf("Onibus %d está no ponto %d com %d pessoas \n",onibus->id,(onibus->partida)%S,onibus->num_pessoas);
             if(total_pessoas<=0){
                 stay=0;
             }
             total_pessoas--;
             onibus->num_pessoas--;
-            pthread_mutex_unlock(&onibus->pontos[(onibus->partida)%S].mutex);
+            pthread_mutex_unlock(&onibus->pontos[(onibus->partida)%S].mutex); // liberando mutex que dá acesso ao ponto de ônibus
         }
         onibus->partida++; 
     } while (stay);
@@ -73,17 +81,46 @@ void *passageiro(void *arg){
     passageiro->tempo_fim = time( NULL);
     pthread_exit(0);
 }
+
+void adicionarPassageiro(t_PontoOnibus *ponto, t_Passageiros *novoPassageiro){
+    t_Passageiros *atual = ponto->fila_passageiros; 
+    if (atual == NULL){
+        ponto->fila_passageiros = novoPassageiro;
+    }else {
+        while(atual->proximo != NULL){
+            atual = atual->proximo;
+        }
+    atual->proximo = novoPassageiro;  // TODO - ADICIONAR PONTEIRO PARA ÚLTIMO E NÃO PERCORRER A LISTA LIGADA TODA VEZ. 
+    }
+    novoPassageiro->proximo = NULL; 
+    ponto->num_pessoas++; 
+}
+
+void embarquePassageiro(t_PontoOnibus *ponto){
+    t_Passageiros *removido = ponto->fila_passageiros; 
+    if(removido != NULL){
+        ponto->fila_passageiros = removido->proximo;
+        ponto->num_pessoas--;
+        ponto->onibus->num_pessoas++;    
+        sem_post(&removido->embarque); 
+    }
+    else {
+        printf("sem passageiros no ponto"); // TODO - IMPLEMENTAR O NUMERO 
+    }
+}
+
 // ----------------------------------------------------------------------------------------
  void main(int argc, char *argv[]){
     // usando valores pré-definido
-    S = 10; // atoi(argv[1]);
-    C = 5; // atoi(argv[2]);
-    P = 100; // atoi(argv[3]);
+    S = 3; // atoi(argv[1]);
+    C = 1; // atoi(argv[2]);
+    P = 40; // atoi(argv[3]);
     A = 0; // atoi(argv[4]);
     total_pessoas = P; 
     sem_init(&global_mutex,0,1);
     sem_init(&pessoas,0,S);
     pid_t pid = fork();
+
     // PROCESSO ONIBUS
     if (pid == 0) {// Processo filho - Processo 'ônibus'
         
@@ -100,8 +137,8 @@ void *passageiro(void *arg){
         int tmp_end;
         for(int i=0;i<S;i++){
             conjunto_pontos[i].id = i; 
-            pthread_mutex_init(&conjunto_pontos[i].mutex_pessoas,NULL);
             pthread_mutex_init(&conjunto_pontos[i].mutex,NULL);
+            pthread_mutex_init(&conjunto_pontos[i].mutex_busAcesso,NULL);
         }
         // INICIANDO ONIBUS ---------------------------------------------------------------
         for(int i=0;i<C;i++){
@@ -118,7 +155,10 @@ void *passageiro(void *arg){
             tmp_end = rand()%S;
             conjunto_passageiro[i].ponto_origem = tmp_start;
             conjunto_passageiro[i].ponto_saida = tmp_end;
-            conjunto_pontos[tmp_start].num_pessoas++; 
+            adicionarPassageiro(&conjunto_pontos[tmp_start],&conjunto_passageiro[i]);
+        }
+        for (int i=0;i<S;i++){
+            sem_init(&conjunto_pontos[i].passageiros_espera,0,conjunto_pontos[i].num_pessoas);
         }
 
         // -----------------------RUNNING THREADS -----------------------------------------
