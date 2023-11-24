@@ -9,11 +9,16 @@
 #include <sys/types.h>
 #include <time.h> 
 
+#define S 5
+#define C 1
+#define A 10
+#define P 30
 sem_t pessoas; 
 sem_t global_mutex; 
-int S,C,A,P;
 int total_pessoas; 
 int stay; 
+
+
 
 typedef struct t_Onibus t_Onibus;
 typedef struct t_Passageiros t_Passageiros;
@@ -22,11 +27,11 @@ typedef struct t_PontoOnibus{
     int num_pessoas; 
     int id; 
     pthread_mutex_t mutex; // mutex para impedir que haja mais de um onibus em um mesmo ponto.  
-    pthread_mutex_t mutex_busAcesso; // mutex para que o ponto apenas fique acordado quando o onibus estiver no ponto
-    pthread_mutex_t mutex_passageiro;
-    sem_t passageiros_espera; // semáforo contador para número de pessoas esperando no ponto 
+    pthread_mutex_t mutex_passageiro; // mutex para controlar acesso dos passageiros 
+    pthread_mutex_t mutex_ob; // mutex para priorizar a entrada do onibus no ponto. 
     t_Onibus *onibus; // ponteiro que indica qual ônibus está esperando no ponto 
     int primeiro_passageiros; // ponteiro para o primeiro passageiro da fila
+    // pthread_mutex_t mutex_busAcesso; // mutex para que o ponto apenas fique acordado quando o onibus estiver no ponto
 }t_PontoOnibus; 
 
 struct t_Onibus{
@@ -53,8 +58,9 @@ struct t_Passageiros{
     t_Onibus *Onibus;
     int prox; 
     t_Passageiros *proximo; 
-    pthread_mutex_t embarque; 
+    pthread_mutex_t mutex_embarque; 
 };
+t_PontoOnibus conjunto_pontos[S];
 
 // ----------------------------------------------------------------------------------------
 /*
@@ -70,6 +76,7 @@ void *pontoOnibus(void *arg){
     pthread_exit(0); 
 }
 */
+
 
 void *onibus(void *arg){
     t_Onibus *onibus = (t_Onibus *)arg; 
@@ -91,10 +98,52 @@ void *onibus(void *arg){
 }
 
 void *passageiro(void *arg){
+    int stay=1;
     t_Passageiros *passageiro = (t_Passageiros *)arg; 
+    int tmp_start = rand()%S;
+    int tmp_end = rand()%S;
+    passageiro->ponto_origem = tmp_start;
+    passageiro->ponto_saida = tmp_end; 
+    // entrada no ônibus   
+    pthread_mutex_lock(&conjunto_pontos[tmp_start].mutex_passageiro);
+    pthread_mutex_lock(&conjunto_pontos[tmp_start].mutex_ob);
+    adicionarPassageiroPonto(passageiro,&conjunto_pontos[tmp_start],passageiro->id);
+    pthread_mutex_unlock(&conjunto_pontos[tmp_start].mutex_ob);
+    pthread_mutex_unlock(&conjunto_pontos[tmp_start].mutex_passageiro);
+    // espera subida pelo ônibus 
     passageiro->tempo_comeco = time(NULL);
     passageiro->tempo_fim = time( NULL);
+    do {
+        pthread_mutex_lock(&passageiro->mutex_embarque);
+        if((conjunto_pontos[tmp_start].onibus->num_pessoas-conjunto_pontos[tmp_start].onibus->assentos)==0){
+            
+        }
+    }while(stay);
+    // 
+
     pthread_exit(0);
+}
+
+
+void adicionarPassageiroPonto(t_PontoOnibus *Ponto, t_Passageiros *Passageiros, int id){
+    t_PontoOnibus *ponto =  Ponto; 
+    t_Passageiros *conjunto_passageiro = Passageiros;
+    printf("Ponto aqui foi recebido normalmente: %d\n",ponto->id);
+    printf("Passageiro foi recebido normalmente: %d\n",id);
+    if (ponto->primeiro_passageiros == -1) {
+        ponto->primeiro_passageiros = id;
+    } 
+    else {
+        // Caso contrário, percorra a lista e insira no final
+        int atual = ponto->primeiro_passageiros;
+        while (conjunto_passageiro[atual].prox != -1) {
+            atual = conjunto_passageiro[atual].prox;
+        }
+        conjunto_passageiro[atual].prox = id;
+    }
+    // Incrementa o contador de passageiros
+    ponto->num_pessoas++;
+    printf("numero de pessoas no ponto %d após arrumar:%d\n",id, ponto->num_pessoas);        
 }
 
 // ----------------------------------------------------------------------------------------
@@ -102,10 +151,6 @@ void *passageiro(void *arg){
     // usando valores pré-definido
     
     stay=1;
-    S = 3; // atoi(argv[1]);
-    C = 1; // atoi(argv[2]);
-    P = 10; // atoi(argv[3]);
-    A = 0; // atoi(argv[4]);
     total_pessoas = P; 
     pid_t pid = fork();
 
@@ -115,7 +160,6 @@ void *passageiro(void *arg){
         // DECLARANDO THREADS E AS ESTRUTURAS DE DADOS
         t_Passageiros conjunto_passageiro[P];
         pthread_t Passageiro_h[P];
-        t_PontoOnibus conjunto_pontos[S];
         pthread_t PontoOnibus_h[S];  
         t_Onibus conjunto_onibus[C];
         pthread_t Onibus_h[C];
@@ -127,8 +171,7 @@ void *passageiro(void *arg){
             conjunto_pontos[i].id = i; 
             conjunto_pontos[i].primeiro_passageiros = -1;
             conjunto_pontos[i].num_pessoas = 0;
-            pthread_mutex_init(&conjunto_pontos[i].mutex_busAcesso,NULL);
-            pthread_mutex_lock(&conjunto_pontos[i].mutex_busAcesso); // iniciando o ponto com mutex = 0, para que a thread ponto espere até que haja um ônibus no local. 
+            pthread_mutex_init(&conjunto_pontos[i].mutex,NULL);
         }
         // INICIANDO ONIBUS ---------------------------------------------------------------
         for(int i=0;i<C;i++){
@@ -145,31 +188,6 @@ void *passageiro(void *arg){
             conjunto_passageiro[i].id = i;
             conjunto_passageiro[i].prox = -1;
         }
-        for(int i=0;i<P;i++){
-            tmp_start = rand()%S;
-            tmp_end = rand()%S;
-            
-            conjunto_passageiro[i].ponto_origem = tmp_start;
-            conjunto_passageiro[i].ponto_saida = tmp_end; 
-            if (conjunto_pontos[tmp_start].primeiro_passageiros == -1) {
-                conjunto_pontos[tmp_start].primeiro_passageiros = i;
-            } 
-            else {
-                // Caso contrário, percorra a lista e insira no final
-                int atual = conjunto_pontos[tmp_start].primeiro_passageiros;
-                while (conjunto_passageiro[atual].prox != -1) {
-                    atual = conjunto_passageiro[atual].prox;
-                }
-                conjunto_passageiro[atual].prox = i;
-            }
-            // Incrementa o contador de passageiros
-            conjunto_pontos[tmp_start].num_pessoas++;
-            printf("numero de pessoas no ponto %d após arrumar:%d\n",tmp_start, conjunto_pontos[tmp_start].num_pessoas);         
-            // adicionarPassageiro(&conjunto_pontos[tmp_start],&conjunto_passageiro[i]);
-        }
-        for (int i=0;i<S;i++){
-            sem_init(&conjunto_pontos[i].passageiros_espera,0,conjunto_pontos[i].num_pessoas);
-        }
 
         // -----------------------RUNNING THREADS -----------------------------------------
          for(int i=0;i<C;i++){
@@ -185,10 +203,6 @@ void *passageiro(void *arg){
                 fflush(0);
                 exit(0);
             }; 
-        }
-    
-        for (int i=0; i < S; i++) {
-		    pthread_join(PontoOnibus_h[ i ], 0);
         }
         for (int i=0; i < C; i++) {
             pthread_join(Onibus_h[ i ], 0);
