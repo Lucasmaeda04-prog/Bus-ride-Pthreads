@@ -1,4 +1,4 @@
-// para compilar: gcc prodcons_n_threads_sem.c -o prodcons_n_threads_sem -  
+// para compilar: gcc prodcons_n_threads_sem.c -o prodcons_n_threads_sem -lpthread
 // para executar: prodcons_n_threads_sem
 #define _POSIX_C_SOURCE 200112L /* Or higher */ // permitindo a utilização de barreiras
 #include <stdlib.h>
@@ -9,10 +9,10 @@
 #include <sys/types.h>
 #include <time.h> 
 
-#define S 2
-#define C 1
+#define S 30
+#define C 20
 #define A 10
-#define P 7
+#define P 100
 
 sem_t pessoas_inseridas; 
 sem_t pessoas_global_sem; 
@@ -68,27 +68,26 @@ t_PontoOnibus conjunto_pontos[S];
 
 // ----------------------------------------------------------------------------------------
 
-void adicionarPassageiroPonto(t_PontoOnibus *Ponto, int id){
-    t_PontoOnibus *ponto =  Ponto; 
-    int atual = ponto->primeiro_passageiros;
-    if (ponto->primeiro_passageiros == -1) {
+void adicionarPassageiroPonto(int Ponto, int id){
+    int atual = conjunto_pontos[Ponto].primeiro_passageiros;
+    if (atual == -1) {
         // printf("Primeiro:%d e prox:%d\n",atual,conjunto_passageiro[atual].prox);
-        printf("(Ponto%d):não havia passageiros, o primeiro agora é:%d\n",ponto->id,id);
-        ponto->primeiro_passageiros = id;
+        printf("(Ponto%d):não havia passageiros, o primeiro agora é:%d\n",Ponto,id);
+        conjunto_pontos[Ponto].primeiro_passageiros = id;
     } 
     else {
         // Caso contrário, percorra a lista e insira no final
         while (conjunto_passageiro[atual].prox != -1) {
-            printf("(Ponto%d): Sequência no ponto:%d-",ponto->id,atual);
+            printf("(Ponto%d): Sequência no ponto:%d-",Ponto,atual);
             atual = conjunto_passageiro[atual].prox;
         }
-        printf("\n Ponto(%d):Adicionado o passageiro %d\n",ponto->id, id);
+        printf("\n Ponto(%d):Adicionado o passageiro %d\n",Ponto, id);
         conjunto_passageiro[atual].prox = id;
     }
         //printf("Atual:%d e prox:%d\n",atual,conjunto_passageiro[atual].prox);
     // Incrementa o contador de passageiros
-    ponto->num_pessoas++;
-    printf("(ponto %d): numero de pessoas no ponto após arrumar:%d O primeiro é o %d \n",ponto->id,ponto->num_pessoas,ponto->primeiro_passageiros);        
+    conjunto_pontos[Ponto].num_pessoas++;
+    printf("(ponto %d): numero de pessoas no ponto após arrumar:%d O primeiro é o %d \n",Ponto,conjunto_pontos[Ponto].num_pessoas,conjunto_pontos[Ponto].primeiro_passageiros);        
 }
 
 void *onibus(void *arg){
@@ -155,7 +154,7 @@ void *passageiro(void *arg){
 
     pthread_mutex_lock(&conjunto_pontos[tmp_start].mutex_passageiro); // necessário proteger a inserção do passageiro no ponto pois é necessário manter a ordem do FIFO
     pthread_mutex_lock(&conjunto_pontos[tmp_start].mutex_ob);  // utilizando a mesma lógica de escritor e leitor, entre os passageiros que entram no ponto e os que sobem para o onibus
-    adicionarPassageiroPonto(&conjunto_pontos[tmp_start],passageiro->id);
+    adicionarPassageiroPonto(tmp_start,passageiro->id);
     pthread_mutex_unlock(&conjunto_pontos[tmp_start].mutex_ob);
     pthread_mutex_unlock(&conjunto_pontos[tmp_start].mutex_passageiro);
     
@@ -180,19 +179,19 @@ void *passageiro(void *arg){
             conjunto_pontos[tmp_start].num_pessoas--;
 
             // verifica se não é o último passageiro a subir 
-            if(passageiro->prox!=-1){ 
-                pthread_mutex_unlock(&conjunto_passageiro[passageiro->prox].mutex_embarque); // acorda o próximo passageiro da fila 
-            }
-            else{
-                printf("(passageiro %d): acordando o ônibus %d no ponto %d\n",passageiro->id,conjunto_pontos[tmp_start].id_onibus,tmp_start);
-                pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_subida); // acordando o ônibus
-            }
+            
             stay=0;
         }
-        pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_subida); // acordando o ônibus
+        if(passageiro->prox!=-1){ 
+            pthread_mutex_unlock(&conjunto_passageiro[passageiro->prox].mutex_embarque); // acorda o próximo passageiro da fila 
+        }
+        else{
+            printf("(passageiro %d): acordando o ônibus %d que possui %d passageiros, no ponto %d\n",passageiro->id,conjunto_pontos[tmp_start].id_onibus,conjunto_onibus[passageiro->id_onibus].num_pessoas,tmp_start);
+            pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_subida); // acordando o ônibus
+        }
     }while(stay);
    
-    printf("\n(passageiro %d): EMBARCADO NO PONTO %d PELO ÔNIBUS:%d TOTAL INSERIDAS ATÉ AGORA:%d\n",passageiro->id,tmp_start, passageiro->id_onibus,total_pessoas_inseridas);
+    printf("\n(passageiro %d): EMBARCADO NO PONTO %d PELO ÔNIBUS:%d, ONIBUS POSSUI  TOTAL INSERIDAS ATÉ AGORA:%d\n",passageiro->id,tmp_start, passageiro->id_onibus,total_pessoas_inseridas);
 
 
     // DESEMBARQUE PASSAGEIRO -------------------------------------------------
