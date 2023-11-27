@@ -9,10 +9,10 @@
 #include <sys/types.h>
 #include <time.h> 
 
-#define S 4
+#define S 2
 #define C 1
 #define A 10
-#define P 3
+#define P 7
 
 sem_t pessoas_inseridas; 
 sem_t pessoas_global_sem; 
@@ -29,7 +29,6 @@ typedef struct t_PontoOnibus{
     int num_pessoas; 
     int id; 
     pthread_mutex_t mutex; // mutex para impedir que haja mais de um onibus em um mesmo ponto. 
-    
     pthread_mutex_t mutex_passageiro; // mutex para controlar acesso dos passageiros 
     pthread_mutex_t mutex_ob; // mutex para priorizar a entrada do onibus no ponto invés de passageiros (passageiro e onibus não podem estarem alterando numero de pessoas no ponto no mesmo tempo). 
     int  id_onibus; // int que indica qual ônibus está esperando no ponto 
@@ -39,6 +38,7 @@ typedef struct t_PontoOnibus{
 struct t_Onibus{
     int num_pessoas; // espaço ocupado no buffer
     int assentos; // numero total de espaço no buffer
+    int pessoas_descidas;
     int id; 
     int id_ponto; // um ponteiro para a array de pontos de ônibus 
     int partida;  // ponto de partida para o ônibus
@@ -73,20 +73,22 @@ void adicionarPassageiroPonto(t_PontoOnibus *Ponto, int id){
     int atual = ponto->primeiro_passageiros;
     if (ponto->primeiro_passageiros == -1) {
         // printf("Primeiro:%d e prox:%d\n",atual,conjunto_passageiro[atual].prox);
-
+        printf("(Ponto%d):não havia passageiros, o primeiro agora é:%d\n",ponto->id,id);
         ponto->primeiro_passageiros = id;
     } 
     else {
         // Caso contrário, percorra a lista e insira no final
         while (conjunto_passageiro[atual].prox != -1) {
+            printf("(Ponto%d): Sequência no ponto:%d-",ponto->id,atual);
             atual = conjunto_passageiro[atual].prox;
         }
+        printf("\n Ponto(%d):Adicionado o passageiro %d\n",ponto->id, id);
         conjunto_passageiro[atual].prox = id;
     }
         //printf("Atual:%d e prox:%d\n",atual,conjunto_passageiro[atual].prox);
     // Incrementa o contador de passageiros
     ponto->num_pessoas++;
-    printf("(ponto %d): numero de pessoas no ponto após arrumar:%d\n",ponto->id,ponto->num_pessoas);        
+    printf("(ponto %d): numero de pessoas no ponto após arrumar:%d O primeiro é o %d \n",ponto->id,ponto->num_pessoas,ponto->primeiro_passageiros);        
 }
 
 void *onibus(void *arg){
@@ -111,21 +113,22 @@ void *onibus(void *arg){
             conjunto_pontos[(onibus->partida)%S].id_onibus = onibus->id; 
             // DESCIDA DOS PASSAGEIROS NO ONIBUS  --------------------------------------------------------
             sem_init(&onibus->desce_passageiros, 0, onibus->num_pessoas-1); // semáforo com valor = número de pessoas -1, menos um pois o semáforo trava a thread qnd decrementar de 0
-            
-            
+            onibus->pessoas_descidas = onibus->num_pessoas; 
             if(onibus->num_pessoas>0){
-                printf("(onibus %d): desembarcar passageiros, total de %d passageiros no onibus\n",onibus->id,onibus->num_pessoas);
-                pthread_mutex_unlock(&onibus->mutex_desembarque);
-                pthread_mutex_lock(&onibus->sleep_onibus_descida);
+                printf("(onibus %d): desembarcar passageiros no ponto %d, total de %d passageiros no onibus\n",onibus->id,onibus->partida%S, onibus->num_pessoas);
+                while(onibus->pessoas_descidas > 0){
+                    pthread_mutex_unlock(&onibus->mutex_desembarque);
+                    pthread_mutex_lock(&onibus->sleep_onibus_descida);
+                }
             }
 
             // SUBIDA DOS PASSAGEIROS NO ONIBUS ---------------------------------------------------------
             pthread_mutex_lock(&conjunto_pontos[(onibus->partida)%S].mutex_ob); // impedindo que novos passageiros entrem no ponto enquanto o ônibus estiver lá
             if(conjunto_pontos[(onibus->partida)%S].num_pessoas>0){ // verificando se ainda tem pessoas no ponto // TODO - ARRUMAR ISSO COM UM SEMÁFORO CONTADOR DEPOIS. 
-                printf("(onibus %d): iniciando embarque dos passageiros\n");
+                printf("(onibus %d): iniciando embarque dos passageiros no ponto %d, o ponto possui %d passageiros esperando, o primeiro é o%d\n,",onibus->id,onibus->partida%S,conjunto_pontos[(onibus->partida)%S].num_pessoas, conjunto_pontos[(onibus->partida)%S].primeiro_passageiros);
                 pthread_mutex_unlock(&conjunto_passageiro[conjunto_pontos[(onibus->partida)%S].primeiro_passageiros].mutex_embarque); // acordando o primeiro passageiro do FIFO do Ponto 
                 pthread_mutex_lock(&onibus->sleep_onibus_subida); // onibus se colando para dormir enquanto passageiros sobem 
-                printf("(onibus %d): fazendo embarque está no ponto %d com %d pessoas \n",onibus->id,(onibus->partida)%S,onibus->num_pessoas);            
+                printf("(onibus %d):  embarque concluido está no ponto %d com %d pessoas \n",onibus->id,(onibus->partida)%S,onibus->num_pessoas);            
             }
             pthread_mutex_unlock(&conjunto_pontos[(onibus->partida)%S].mutex_ob);
             pthread_mutex_unlock(&conjunto_pontos[(onibus->partida)%S].mutex); // liberando mutex que dá acesso ao ponto de ônibus
@@ -166,6 +169,8 @@ void *passageiro(void *arg){
         printf("(passageiro %d): tentando embarcar no ponto %d com o ônibus %d\n",passageiro->id, tmp_start, conjunto_onibus[tmp_start].id);
         passageiro->id_onibus = conjunto_pontos[tmp_start].id_onibus;
         if((conjunto_onibus[passageiro->id_onibus].assentos - conjunto_onibus[passageiro->id_onibus].num_pessoas)>0){ // verifica se há lugares livres
+            printf("(passageiro %d):Atualizando o indíce do primeiro passageiro para o ponto%d, era %d, agora é %d",passageiro->id,tmp_start, conjunto_pontos[passageiro->ponto_origem].primeiro_passageiros, conjunto_passageiro[conjunto_pontos[passageiro->ponto_origem].primeiro_passageiros].prox);
+            conjunto_pontos[passageiro->ponto_origem].primeiro_passageiros =  conjunto_passageiro[conjunto_pontos[passageiro->ponto_origem].primeiro_passageiros].prox;
             sem_post(&pessoas_inseridas);
             sem_getvalue(&pessoas_inseridas,&total_pessoas_inseridas);
             // printf("PESSOAS EMBARCADAS:%d\n\n",total_pessoas_inseridas);
@@ -184,6 +189,7 @@ void *passageiro(void *arg){
             }
             stay=0;
         }
+        pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_subida); // acordando o ônibus
     }while(stay);
    
     printf("\n(passageiro %d): EMBARCADO NO PONTO %d PELO ÔNIBUS:%d TOTAL INSERIDAS ATÉ AGORA:%d\n",passageiro->id,tmp_start, passageiro->id_onibus,total_pessoas_inseridas);
@@ -192,11 +198,6 @@ void *passageiro(void *arg){
     // DESEMBARQUE PASSAGEIRO -------------------------------------------------
     int stay2 =1; 
     do{
-        if (pthread_mutex_trylock(&conjunto_onibus[passageiro->id_onibus].mutex_desembarque) == 0) {
-            printf("O mutex está desbloqueado.\n");
-        } else {
-            printf("O mutex está bloqueado.\n");
-        }
         printf("Valor do Mutex: %p\n", conjunto_onibus[passageiro->id_onibus].mutex_desembarque);
         pthread_mutex_lock(&conjunto_onibus[passageiro->id_onibus].mutex_desembarque);// dorme enquanto não chegar em um ponto e é acordado pelo ônibus
         printf("(passageiro %d): tentando sair pelo ônibus %d , no ponto:%d,saida esperada:%d \n\n",passageiro->id,passageiro->id_onibus, conjunto_onibus[passageiro->id_onibus].partida%S,passageiro->ponto_saida);
@@ -210,14 +211,10 @@ void *passageiro(void *arg){
         }
         int num_passageiros_descida; 
         sem_getvalue(&conjunto_onibus[passageiro->id_onibus].desce_passageiros,&num_passageiros_descida);
-        printf("(passageiro %d): pra descer do ônibus com:%d passageiros, de um total de %d passageiros no sistema inteiro.\n",passageiro->id, num_passageiros_descida+1,total_pessoas);
-        if(sem_trywait(&conjunto_onibus[passageiro->id_onibus].desce_passageiros)!=0){  // verificação se é o último passageiro interno a tentar descer. 
-            teste++,
-            printf("(passageiro %d)acordar o ônibus %d no ponto %d pois é o ultimo, %d\n ",passageiro->id, passageiro->id_onibus,conjunto_onibus[passageiro->id_onibus].partida%S ,teste);
-            pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_descida); // acordando ônibus
-        }
+        conjunto_onibus[passageiro->id_onibus].pessoas_descidas--;
+        pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_descida); // acordando ônibus
     } while (stay2);
-    printf("PASSAGEIRO: %d SAINDO!!!",passageiro->id);
+    printf("\n\nPASSAGEIRO: %d SAINDO!!!\n\n",passageiro->id);
     pthread_exit(0);
 }
 
@@ -227,12 +224,10 @@ void *passageiro(void *arg){
  void main(int argc, char *argv[]){
     // usando valores pré-definido
     total_pessoas = P; 
-    pid_t pid = fork();
     sem_init(&pessoas_global_sem,0,P); 
     sem_init(&pessoas_inseridas,0,0);
 
     // PROCESSO ONIBUS
-    if (pid == 0) {// Processo filho - Processo 'ônibus'
         
        
         // INICIANDO PONTO DE ONIBUS ------------------------------------------------------
@@ -268,6 +263,8 @@ void *passageiro(void *arg){
             conjunto_passageiro[i].id = i;
             conjunto_passageiro[i].prox = -1;
             pthread_mutex_init(&conjunto_passageiro[i].mutex_embarque,NULL);  
+            pthread_mutex_lock(&conjunto_passageiro[i].mutex_embarque);  
+
         }   
 
         // -----------------------RUNNING THREADS -----------------------------------------
@@ -291,15 +288,6 @@ void *passageiro(void *arg){
         for (int i=0; i < P; i++) {
             pthread_join(Passageiro_h[ i ], 0);
         }
-    }else if (pid > 0) {
-        // Processo pai
-        wait(NULL); // Esperar o processo filho terminar
-
-    }else {
-        // Erro ao criar o processo
-        perror("fork");
-        return -1;
-    }
 
     exit(0); 
 } 
