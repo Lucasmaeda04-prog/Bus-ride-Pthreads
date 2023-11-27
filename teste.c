@@ -8,11 +8,13 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <time.h> 
+#include <sys/stat.h>
+
 
 #define S 30
 #define C 20
 #define A 10
-#define P 100
+#define P 200
 
 sem_t pessoas_inseridas; 
 sem_t pessoas_global_sem; 
@@ -42,9 +44,9 @@ struct t_Onibus{
     int id; 
     int id_ponto; // um ponteiro para a array de pontos de ônibus 
     int partida;  // ponto de partida para o ônibus
-    pthread_mutex_t mutex_desembarque; // mutex para acordar passageiro quando chegar no ponto
-    pthread_mutex_t sleep_onibus_descida; // onibus esperando povo descer 
-    pthread_mutex_t sleep_onibus_subida; // onibus esperando povo subir 
+    pthread_mutex_t  mutex_desembarque; // mutex para acordar passageiro quando chegar no ponto
+    pthread_mutex_t  sleep_onibus_descida; // onibus esperando povo descer 
+    pthread_mutex_t  sleep_onibus_subida; // onibus esperando povo subir 
     sem_t desce_passageiros; // semáforo com valor temporário equivalente ao número de pessoas que estão no onibus e podem ou não descer. 
 };
 
@@ -52,8 +54,9 @@ struct t_Passageiros{
     int id; 
     int ponto_origem; 
     int ponto_saida;
-    time_t tempo_comeco; 
-    time_t tempo_fim; 
+    struct timespec hora_chegada_origem; 
+    struct timespec hora_entrada_onibus;
+    struct timespec hora_saida_onibus; 
     int id_onibus;
     int prox;  // int com endereço para próxima elemento da FIFO no ponto de onibus 
     pthread_mutex_t mutex_embarque; // mutex para hora de embarcar 
@@ -67,6 +70,33 @@ pthread_t Onibus_h[C];
 t_PontoOnibus conjunto_pontos[S];
 
 // ----------------------------------------------------------------------------------------
+void criarPastaRastreio() {
+    struct stat st = {0};
+    if (stat("rastreio", &st) == -1) {
+        mkdir("rastreio", 0700);
+    }
+}
+
+void salvarViagem(t_Passageiros *passageiro) {
+    criarPastaRastreio();
+    
+    char arquivo_trace[50];
+    sprintf(arquivo_trace, "rastreio/passageiro%d.trace", passageiro->id);
+
+
+    FILE *file = fopen(arquivo_trace, "w");
+    if (file == NULL) {
+        perror("Erro ao abrir arquivo de rastreamento");
+        exit(1);
+    }
+
+    // Escreve todos os eventos no arquivo
+    fprintf(file, "Horário de Chegada no ponto de origem %d: %ld.%09ld\n", passageiro->ponto_origem, passageiro->hora_chegada_origem.tv_sec, passageiro->hora_chegada_origem.tv_nsec);
+    fprintf(file, "Horário de Entrada no ônibus %d: %ld.%09ld\n",passageiro->id_onibus, passageiro->hora_entrada_onibus.tv_sec, passageiro->hora_entrada_onibus.tv_nsec);
+    fprintf(file, "Horário de Saída do ônibus %d: %ld.%09ld\n",passageiro->id_onibus, passageiro->hora_saida_onibus.tv_sec, passageiro->hora_saida_onibus.tv_nsec);
+    fprintf(file, "Ponto de destino: %d\n", passageiro->ponto_saida);
+    fclose(file);
+}
 
 void adicionarPassageiroPonto(int Ponto, int id){
     int atual = conjunto_pontos[Ponto].primeiro_passageiros;
@@ -155,13 +185,11 @@ void *passageiro(void *arg){
     pthread_mutex_lock(&conjunto_pontos[tmp_start].mutex_passageiro); // necessário proteger a inserção do passageiro no ponto pois é necessário manter a ordem do FIFO
     pthread_mutex_lock(&conjunto_pontos[tmp_start].mutex_ob);  // utilizando a mesma lógica de escritor e leitor, entre os passageiros que entram no ponto e os que sobem para o onibus
     adicionarPassageiroPonto(tmp_start,passageiro->id);
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&passageiro->hora_chegada_origem); // marcando inicio da  espera no ponto 
     pthread_mutex_unlock(&conjunto_pontos[tmp_start].mutex_ob);
     pthread_mutex_unlock(&conjunto_pontos[tmp_start].mutex_passageiro);
     
     // EMBARQUE PASSAGEIRO  ----------------------------------------------------------------------------
-
-    passageiro->tempo_comeco = time(NULL); // marcando inicio da  espera no ponto 
-    passageiro->tempo_fim = time( NULL); 
 
     do { //enquanto não conseguir embarcar 
         pthread_mutex_lock(&passageiro->mutex_embarque); // passageiro dorme, enquanto o ônibus não chega no ponto
@@ -190,7 +218,7 @@ void *passageiro(void *arg){
             pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_subida); // acordando o ônibus
         }
     }while(stay);
-   
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&passageiro->hora_entrada_onibus); // marcando horário de entrada no onibus
     printf("\n(passageiro %d): EMBARCADO NO PONTO %d PELO ÔNIBUS:%d, ONIBUS POSSUI  TOTAL INSERIDAS ATÉ AGORA:%d\n",passageiro->id,tmp_start, passageiro->id_onibus,total_pessoas_inseridas);
 
 
@@ -214,6 +242,8 @@ void *passageiro(void *arg){
         pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_descida); // acordando ônibus
     } while (stay2);
     printf("\n\nPASSAGEIRO: %d SAINDO!!!\n\n",passageiro->id);
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&passageiro->hora_saida_onibus);
+    salvarViagem(passageiro);
     pthread_exit(0);
 }
 
@@ -225,10 +255,9 @@ void *passageiro(void *arg){
     total_pessoas = P; 
     sem_init(&pessoas_global_sem,0,P); 
     sem_init(&pessoas_inseridas,0,0);
-
+    pid_t pid = fork();
     // PROCESSO ONIBUS
-        
-       
+    if (pid == 0) {// Processo filho - Processo 'ônibus'
         // INICIANDO PONTO DE ONIBUS ------------------------------------------------------
         
         int tmp_start; 
@@ -287,6 +316,15 @@ void *passageiro(void *arg){
         for (int i=0; i < P; i++) {
             pthread_join(Passageiro_h[ i ], 0);
         }
+    }else if (pid > 0) {
+        // Processo pai
+        wait(NULL); // Esperar o processo filho terminar
+
+    }else {
+        // Erro ao criar o processo
+        perror("fork");
+        return -1;
+    }
 
     exit(0); 
 } 

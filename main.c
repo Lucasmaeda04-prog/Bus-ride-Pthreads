@@ -296,7 +296,7 @@ void *passageiro(void *arg){
         wait(NULL); // Esperar o processo filho terminar
 
     }else {
-        // Erro ao criar o processo
+        //   Erro ao criar o processo
         perror("fork");
         return -1;
     }
