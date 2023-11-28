@@ -10,18 +10,13 @@
 #include <time.h> 
 #include <sys/stat.h>
 
-
-#define S 30
-#define C 20
-#define A 10
-#define P 200
-
+int S; 
+int P;
+int A;
+int C; 
 sem_t pessoas_inseridas; 
 sem_t pessoas_global_sem; 
-sem_t global_mutex; 
-
 int total_pessoas; 
-int teste;
 int total_pessoas_inseridas;
 
 typedef struct t_Onibus t_Onibus;
@@ -62,12 +57,13 @@ struct t_Passageiros{
     pthread_mutex_t mutex_embarque; // mutex para hora de embarcar 
 };
 
-// DECLARANDO THREADS E AS ESTRUTURAS DE DADOS
-t_Passageiros conjunto_passageiro[P];
-pthread_t Passageiro_h[P];
-t_Onibus conjunto_onibus[C];
-pthread_t Onibus_h[C];
-t_PontoOnibus conjunto_pontos[S];
+typedef struct t_Argumento{     
+    t_Passageiros* conjunto_passageiro;
+    t_PontoOnibus* conjunto_pontos;
+    t_Onibus* conjunto_onibus;  
+}t_Argumento;
+
+t_Argumento args; 
 
 // ----------------------------------------------------------------------------------------
 void criarPastaRastreio() {
@@ -99,6 +95,14 @@ void salvarViagem(t_Passageiros *passageiro) {
 }
 
 void adicionarPassageiroPonto(int Ponto, int id){
+    t_Passageiros *conjunto_passageiro ;
+    t_PontoOnibus *conjunto_pontos;
+    t_Onibus *conjunto_onibus;
+    conjunto_passageiro= args.conjunto_passageiro;
+    conjunto_pontos = args.conjunto_pontos;
+    conjunto_onibus = args.conjunto_onibus; 
+
+
     int atual = conjunto_pontos[Ponto].primeiro_passageiros;
     if (atual == -1) {
         // printf("Primeiro:%d e prox:%d\n",atual,conjunto_passageiro[atual].prox);
@@ -121,9 +125,18 @@ void adicionarPassageiroPonto(int Ponto, int id){
 }
 
 void *onibus(void *arg){
+    int id = (int)(intptr_t)arg; 
+    printf("ID:%d",id);
     int stay=1; 
     int descida_tmp; // variável tmp que recebe valor equivalente ao contador desce_passageiro
-    t_Onibus *onibus = (t_Onibus *)arg; 
+    t_Onibus *onibus = &args.conjunto_onibus[id]; 
+    t_Passageiros *conjunto_passageiro ;
+    t_PontoOnibus *conjunto_pontos;
+    t_Onibus *conjunto_onibus;
+    conjunto_passageiro = args.conjunto_passageiro;
+    conjunto_pontos = args.conjunto_pontos;
+    conjunto_onibus = args.conjunto_onibus; 
+    printf("testando %d",conjunto_passageiro[id].id);
     printf("Thread do Onibus:(%d) iniciada\n",onibus->id);
 
     // circulação do onibus enquanto houver passageiros no sistema global. 
@@ -148,7 +161,7 @@ void *onibus(void *arg){
                 while(onibus->pessoas_descidas > 0){
                     pthread_mutex_unlock(&onibus->mutex_desembarque);
                     pthread_mutex_lock(&onibus->sleep_onibus_descida);
-                }
+                }   
             }
 
             // SUBIDA DOS PASSAGEIROS NO ONIBUS ---------------------------------------------------------
@@ -171,8 +184,18 @@ void *onibus(void *arg){
 }
 
 void *passageiro(void *arg){
+    int id = (int)(intptr_t)arg;
     int stay=1;
-    t_Passageiros *passageiro = (t_Passageiros *)arg; 
+    
+    t_Passageiros *passageiro = &args.conjunto_passageiro[id];
+    t_Passageiros *conjunto_passageiro ;
+    t_PontoOnibus *conjunto_pontos;
+    t_Onibus *conjunto_onibus;
+    conjunto_passageiro= args.conjunto_passageiro;
+    conjunto_pontos = args.conjunto_pontos;
+    conjunto_onibus = args.conjunto_onibus; 
+
+
     printf("Thread do Passageiro:(%d) iniciada\n",passageiro->id);
     int tmp_start = rand()%S;
     int tmp_end = rand()%S;
@@ -241,6 +264,7 @@ void *passageiro(void *arg){
         conjunto_onibus[passageiro->id_onibus].pessoas_descidas--;
         pthread_mutex_unlock(&conjunto_onibus[passageiro->id_onibus].sleep_onibus_descida); // acordando ônibus
     } while (stay2);
+
     printf("\n\nPASSAGEIRO: %d SAINDO!!!\n\n",passageiro->id);
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&passageiro->hora_saida_onibus);
     salvarViagem(passageiro);
@@ -252,10 +276,31 @@ void *passageiro(void *arg){
 // ----------------------------------------------------------------------------------------
  void main(int argc, char *argv[]){
     // usando valores pré-definido
+    printf("Quantos pontos de ônibus você deseja inserir no sistema:\n");
+    scanf("%d",&S);
+    printf("Quantos ônibus você deseja inserir no sistema:\n");
+    scanf("%d",&C);
+    printf("Quantos passageiros você deseja inserir no sistema:\n");
+    scanf("%d",&P);
+    printf("Quantos assemtos por ônibus você deseja inserir no sistema:\n");
+    scanf("%d",&A);
+
     total_pessoas = P; 
+    t_Passageiros conjunto_passageiro[P];
+    t_Onibus conjunto_onibus[C];
+    t_PontoOnibus conjunto_pontos[S];
+    
+    args.conjunto_onibus = conjunto_onibus;
+    args.conjunto_passageiro = conjunto_passageiro;
+    args.conjunto_pontos = conjunto_pontos;
+    
+    pthread_t Passageiro_h[P];
+    pthread_t Onibus_h[C];
+
     sem_init(&pessoas_global_sem,0,P); 
     sem_init(&pessoas_inseridas,0,0);
     pid_t pid = fork();
+    
     // PROCESSO ONIBUS
     if (pid == 0) {// Processo filho - Processo 'ônibus'
         // INICIANDO PONTO DE ONIBUS ------------------------------------------------------
@@ -276,6 +321,8 @@ void *passageiro(void *arg){
             conjunto_onibus[i].id = i;
             conjunto_onibus[i].assentos = A;
             conjunto_onibus[i].partida = rand()%S; 
+            conjunto_onibus[i].num_pessoas = 0;
+
             pthread_mutex_init(&conjunto_onibus[i].mutex_desembarque,NULL);  
             pthread_mutex_init(&conjunto_onibus[i].sleep_onibus_descida,NULL);  
             pthread_mutex_init(&conjunto_onibus[i].sleep_onibus_subida,NULL);  
@@ -297,14 +344,14 @@ void *passageiro(void *arg){
 
         // -----------------------RUNNING THREADS -----------------------------------------
          for(int i=0;i<C;i++){
-            if (pthread_create(&Onibus_h[i],0,onibus,(void *)&conjunto_onibus[i])!=0){
+            if (pthread_create(&Onibus_h[i],0,onibus,(void *)(intptr_t)i)!=0){
                 printf("Falha ao criar o ônibus");
                 fflush(0);
                 exit(0);
             }; 
         }
          for(int i=0;i<P;i++){
-            if (pthread_create(&Passageiro_h[i],0,passageiro,(void *)&conjunto_passageiro[i])!=0){
+            if (pthread_create(&Passageiro_h[i],0,passageiro,(void *)(intptr_t)i)!=0){
                 printf("Falha ao criar o passageiro");
                 fflush(0);
                 exit(0);
@@ -323,7 +370,7 @@ void *passageiro(void *arg){
     }else {
         // Erro ao criar o processo
         perror("fork");
-        return -1;
+        return;
     }
 
     exit(0); 
